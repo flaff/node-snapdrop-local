@@ -72,9 +72,10 @@ class SnapdropServer {
         this._wss.on('connection', (socket, request) => this._onConnection(new Peer(socket, request)));
         this._wss.on('headers', (headers, response) => this._onHeaders(headers, response));
 
-        this._rooms = {};
+        this._room = {};
 
         console.log('Snapdrop is running on port', port);
+        console.log('WARNING: this is an unsafe fork with a public room. Use only in local network!');
     }
 
     _onConnection(peer) {
@@ -99,6 +100,11 @@ class SnapdropServer {
     }
 
     _onMessage(sender, message) {
+        if (!sender.ip.startsWith('192.')) {
+            console.log(this.sender.ip, ' is outside of localhost. Rejecting.');
+            return;
+        }
+
         // Try to parse message 
         try {
             message = JSON.parse(message);
@@ -116,9 +122,9 @@ class SnapdropServer {
         }
 
         // relay message to recipient
-        if (message.to && this._rooms[sender.ip]) {
+        if (message.to) {
             const recipientId = message.to; // TODO: sanitize
-            const recipient = this._rooms[sender.ip][recipientId];
+            const recipient = this._room[recipientId];
             delete message.to;
             // add sender id
             message.sender = sender.id;
@@ -129,13 +135,18 @@ class SnapdropServer {
 
     _joinRoom(peer) {
         // if room doesn't exist, create it
-        if (!this._rooms[peer.ip]) {
-            this._rooms[peer.ip] = {};
+        if (!this._room) {
+            this._room = {};
+        }
+
+        if (!peer.ip.startsWith('192.')) {
+            console.log(this.peer.ip, ' is outside of localhost. Rejecting.');
+            return;
         }
 
         // notify all other peers
-        for (const otherPeerId in this._rooms[peer.ip]) {
-            const otherPeer = this._rooms[peer.ip][otherPeerId];
+        for (const otherPeerId in this._room) {
+            const otherPeer = this._room[otherPeerId];
             this._send(otherPeer, {
                 type: 'peer-joined',
                 peer: peer.getInfo()
@@ -144,8 +155,8 @@ class SnapdropServer {
 
         // notify peer about the other peers
         const otherPeers = [];
-        for (const otherPeerId in this._rooms[peer.ip]) {
-            otherPeers.push(this._rooms[peer.ip][otherPeerId].getInfo());
+        for (const otherPeerId in this._room) {
+            otherPeers.push(this._room[otherPeerId].getInfo());
         }
 
         this._send(peer, {
@@ -154,24 +165,24 @@ class SnapdropServer {
         });
 
         // add peer to room
-        this._rooms[peer.ip][peer.id] = peer;
+        this._room[peer.id] = peer;
     }
 
     _leaveRoom(peer) {
-        if (!this._rooms[peer.ip] || !this._rooms[peer.ip][peer.id]) return;
-        this._cancelKeepAlive(this._rooms[peer.ip][peer.id]);
+        if (!this._room || !this._room[peer.id]) return;
+        this._cancelKeepAlive(this._room[peer.id]);
 
         // delete the peer
-        delete this._rooms[peer.ip][peer.id];
+        delete this._room[peer.id];
 
         peer.socket.terminate();
         //if room is empty, delete the room
-        if (!Object.keys(this._rooms[peer.ip]).length) {
-            delete this._rooms[peer.ip];
+        if (!Object.keys(this._room).length) {
+            delete this._room;
         } else {
             // notify all other peers
-            for (const otherPeerId in this._rooms[peer.ip]) {
-                const otherPeer = this._rooms[peer.ip][otherPeerId];
+            for (const otherPeerId in this._room) {
+                const otherPeer = this._room[otherPeerId];
                 this._send(otherPeer, { type: 'peer-left', peerId: peer.id });
             }
         }
